@@ -29,11 +29,14 @@ public class TranslationService {
         request.setTarget(targetLanguage); // "zh" for Simplified Mandarin
         request.setFormat("text");
 
-        // Add API key if it's configured
+        // Add API key if it's configured and not empty
         if (libreTranslateApiKey != null && !libreTranslateApiKey.isEmpty()
                 && !libreTranslateApiKey.equals("your_libretranslate_api_key")) {
             request.setApiKey(libreTranslateApiKey);
         }
+
+        System.out.println("Calling LibreTranslate API at: " + libreTranslateApiUrl);
+        System.out.println("Translating: '" + text + "' from " + sourceLanguage + " to " + targetLanguage);
 
         // Call the LibreTranslate API
         return webClient.post()
@@ -41,11 +44,15 @@ public class TranslationService {
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(TranslationResponse.class)
-                .map(TranslationResponse::getTranslatedText)
+                .map(response -> {
+                    String translated = response.getTranslatedText();
+                    System.out.println("Translation successful: '" + text + "' → '" + translated + "'");
+                    return translated;
+                })
                 .onErrorResume(e -> {
-                    // Fallback to a simple placeholder on error
+                    // Provide more detailed error information
                     System.err.println("Translation API error: " + e.getMessage());
-                    return Mono.just("[Translation Failed: " + e.getMessage() + "]");
+                    return Mono.error(new RuntimeException("LibreTranslate API error: " + e.getMessage()));
                 });
     }
 }

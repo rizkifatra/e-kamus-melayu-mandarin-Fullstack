@@ -3,6 +3,7 @@ package com.example.backend.model;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class TranslationRequest {
+    @JsonProperty("q")
     private String text;
     private String source;
     private String target;
