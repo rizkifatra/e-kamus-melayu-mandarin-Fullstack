@@ -18,8 +18,9 @@ public class TranslationService {
     @Value("${libretranslate.api.key:#{null}}")
     private String libreTranslateApiKey;
 
-    public TranslationService() {
-        this.webClient = WebClient.builder().build();
+    public TranslationService(WebClient webClient) {
+        this.webClient = webClient;
+        System.out.println("TranslationService initialized with WebClient: " + webClient);
     }
 
     public Mono<String> translateText(String text, String sourceLanguage, String targetLanguage) {
@@ -44,10 +45,21 @@ public class TranslationService {
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(TranslationResponse.class)
+                .doOnNext(response -> {
+                    System.out.println("Received LibreTranslate API response: " + response);
+                })
                 .map(response -> {
                     String translated = response.getTranslatedText();
                     System.out.println("Translation successful: '" + text + "' → '" + translated + "'");
                     return translated;
+                })
+                .doOnError(error -> {
+                    System.err.println("Error during LibreTranslate API call to " + libreTranslateApiUrl + ": "
+                            + error.getMessage());
+                    if (error.getCause() != null) {
+                        System.err.println("Caused by: " + error.getCause().getMessage());
+                    }
+                    error.printStackTrace();
                 })
                 .onErrorResume(e -> {
                     // Provide more detailed error information

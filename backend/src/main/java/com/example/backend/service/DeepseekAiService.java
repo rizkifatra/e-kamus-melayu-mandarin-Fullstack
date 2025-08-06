@@ -21,8 +21,9 @@ public class DeepseekAiService {
     @Value("${deepseek.api.key}")
     private String deepseekApiKey;
 
-    public DeepseekAiService() {
-        this.webClient = WebClient.builder().build();
+    public DeepseekAiService(WebClient webClient) {
+        this.webClient = webClient;
+        System.out.println("DeepseekAiService initialized with WebClient: " + webClient);
     }
 
     public Mono<AiResponse> generateExplanation(String word, String language) {
@@ -32,46 +33,87 @@ public class DeepseekAiService {
         System.out.println("Sending request to DeepSeek API for word: " + word);
         System.out.println("API URL: " + deepseekApiUrl);
 
-        // Create request body in chat format for Ollama API
-        Map<String, Object> message = Map.of(
-                "role", "user",
-                "content", prompt);
-
         // Use the model name from application.properties via deepseekApiKey
         // This allows us to easily change the model without changing the code
         String modelName = deepseekApiKey.equals("not-needed-for-ollama") ? "deepseek" : deepseekApiKey;
         System.out.println("Using model: " + modelName);
 
+        // For Ollama completions API - using the direct completion endpoint format
         Map<String, Object> requestBody = Map.of(
                 "model", modelName,
-                "messages", java.util.List.of(message),
+                "prompt", prompt,
                 "stream", false,
                 "temperature", 0.7,
                 "max_tokens", 500);
 
+        // Using the API URL as specified in properties
+        String apiUrl = deepseekApiUrl;
+
+        System.out.println("Final API URL: " + apiUrl);
+
+        System.out.println("Sending request to: " + apiUrl);
+        System.out.println("Request body: " + requestBody);
+
         return webClient.post()
-                .uri(deepseekApiUrl)
+                .uri(apiUrl)
                 // No authorization header needed for local Ollama
                 .bodyValue(requestBody)
                 .retrieve()
                 .bodyToMono(Map.class)
+                // Add a timeout specifically for this request
+                .timeout(java.time.Duration.ofMinutes(5), Mono.fromCallable(() -> {
+                    System.out.println("Request to Ollama API timed out after 5 minutes");
+                    throw new RuntimeException("Request to Ollama API timed out. LLM inference may require more time.");
+                }))
                 .doOnNext(response -> {
-                    System.out.println("Received DeepSeek API response");
+                    System.out.println("Received DeepSeek API response: " + response);
+                })
+                .doOnError(error -> {
+                    System.err.println("Error during API call to " + apiUrl + ": " + error.getMessage());
+                    if (error.getCause() != null) {
+                        System.err.println("Caused by: " + error.getCause().getMessage());
+                    }
+                    error.printStackTrace();
                 })
                 .map(response -> {
                     try {
-                        // Parse the Ollama response and extract the generated text
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> responseMessage = (Map<String, Object>) response.get("message");
+                        // Log the full response structure for debugging
+                        System.out.println("Full API response structure: " + response.keySet());
 
-                        if (responseMessage == null) {
-                            throw new RuntimeException("No message found in API response");
+                        String generatedText = null;
+
+                        // Check for response format: Ollama v0.1.x format
+                        if (response.containsKey("response")) {
+                            generatedText = (String) response.get("response");
+                        }
+                        // Check for response format: Ollama chat completion format
+                        else if (response.containsKey("message")) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> responseMessage = (Map<String, Object>) response.get("message");
+                            if (responseMessage != null) {
+                                generatedText = (String) responseMessage.get("content");
+                            }
+                        }
+                        // Check for response format: Older Ollama completion format
+                        else if (response.containsKey("content")) {
+                            generatedText = (String) response.get("content");
                         }
 
-                        String generatedText = (String) responseMessage.get("content");
+                        // Check if response is empty
+                        if ((generatedText == null || generatedText.isEmpty()) && response.containsKey("done_reason")) {
+                            String doneReason = (String) response.get("done_reason");
+                            if ("load".equals(doneReason)) {
+                                // The model is still loading
+                                throw new RuntimeException("The model '" + modelName
+                                        + "' is still loading. Please try again in a few moments.");
+                            } else {
+                                throw new RuntimeException("No content returned from API. Reason: " + doneReason
+                                        + ". Response: " + response);
+                            }
+                        }
 
                         if (generatedText == null || generatedText.isEmpty()) {
-                            throw new RuntimeException("No content found in API response");
+                            throw new RuntimeException("No content found in API response: " + response);
                         }
 
                         System.out.println("Generated text from DeepSeek: " + generatedText);
@@ -94,11 +136,21 @@ public class DeepseekAiService {
                 })
                 .onErrorResume(e -> {
                     System.err.println("DeepSeek API error: " + e.getMessage());
+                    System.err.println("Error class: " + e.getClass().getName());
+
+                    // Check for connection issues
+                    if (e.getMessage().contains("Connection refused") || e.getMessage().contains("Failed to connect")) {
+                        System.err.println("Connection refused: Make sure Ollama container is running at " + apiUrl);
+                    }
+
+                    // Print full stack trace for debugging
                     e.printStackTrace();
 
                     AiResponse fallback = new AiResponse();
-                    fallback.setExplanation("Could not connect to DeepSeek AI service. Error: " + e.getMessage());
-                    fallback.setExamples("No examples available due to connection error.");
+                    fallback.setExplanation(
+                            "Could not connect to DeepSeek AI service at " + apiUrl + ". Error: " + e.getMessage());
+                    fallback.setExamples(
+                            "No examples available due to connection error. Check if Ollama is running with the model loaded.");
                     fallback.setPronunciation(getPinyinFallback(word));
                     fallback.setAdjective(false);
                     return Mono.just(fallback);
@@ -107,18 +159,18 @@ public class DeepseekAiService {
 
     private String generatePrompt(String word, String language) {
         return String.format(
-                "You are a language expert teaching Mandarin Chinese. " +
+                "You are a language expert teaching Mandarin chinese simplified. " +
                         "Please provide a comprehensive explanation of the %s word '%s'. " +
                         "I need the following information in a clear, structured format:\n\n" +
-                        "1. A detailed explanation of what this word means in English.\n" +
+                        "1. A detailed explanation of what this word means in malaysia language.\n" +
                         "2. The exact pinyin pronunciation with tone marks (e.g., 'hǎo' not 'hao3').\n" +
-                        "3. Three example sentences using this word in context (provide both Chinese characters and English translation).\n"
+                        "3. Three example sentences using this word in context (provide both Chinese characters and malaysia language translation).\n"
                         +
                         "4. Determine if this word functions as an adjective in Chinese grammar (YES or NO).\n\n" +
                         "Format your response with these EXACT section headings:\n" +
                         "EXPLANATION: [your detailed explanation here]\n" +
                         "PRONUNCIATION: [pinyin with tone marks only, no Chinese characters]\n" +
-                        "EXAMPLES: [three numbered examples with Chinese and English translations]\n" +
+                        "EXAMPLES: [three numbered examples with Chinese and Malaysia language translations]\n" +
                         "IS_ADJECTIVE: [answer only YES or NO]",
                 language, word);
     }
