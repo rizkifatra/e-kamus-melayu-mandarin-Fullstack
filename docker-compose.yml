@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  libretranslate:
+    image: libretranslate/libretranslate
+    container_name: libretranslate-ms-zh
+    ports:
+      - "5001:5000"
+    volumes:
+      - lt-ms-zh-models:/home/libretranslate/.local
+    command: >
+      --load-only "en,ms,zh"
+      --host "*"
+    restart: unless-stopped
+    networks:
+      - e-kamus-network
+
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    # Use proper command format - ollama serve runs by default
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - e-kamus-network
+
+networks:
+  e-kamus-network:
+    driver: bridge
+
+volumes:
+  lt-ms-zh-models:
+  ollama-models:

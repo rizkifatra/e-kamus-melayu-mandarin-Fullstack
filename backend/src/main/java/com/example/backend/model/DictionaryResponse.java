@@ -5,18 +5,20 @@ public class DictionaryResponse {
     private String mandarinWord;
     private String explanation;
     private String examples;
-    private String pronunciationGuide;
+    private String pinyin;
+    private boolean adjective;
 
     public DictionaryResponse() {
     }
 
     public DictionaryResponse(String malayWord, String mandarinWord, String explanation, String examples,
-            String pronunciationGuide) {
+            String pinyin, boolean adjective) {
         this.malayWord = malayWord;
         this.mandarinWord = mandarinWord;
         this.explanation = explanation;
         this.examples = examples;
-        this.pronunciationGuide = pronunciationGuide;
+        this.pinyin = pinyin;
+        this.adjective = adjective;
     }
 
     public String getMalayWord() {
@@ -51,11 +53,19 @@ public class DictionaryResponse {
         this.examples = examples;
     }
 
-    public String getPronunciationGuide() {
-        return pronunciationGuide;
+    public String getPinyin() {
+        return pinyin;
     }
 
-    public void setPronunciationGuide(String pronunciationGuide) {
-        this.pronunciationGuide = pronunciationGuide;
+    public void setPinyin(String pinyin) {
+        this.pinyin = pinyin;
+    }
+
+    public boolean isAdjective() {
+        return adjective;
+    }
+
+    public void setAdjective(boolean adjective) {
+        this.adjective = adjective;
     }
 }
