@@ -1,4 +1,4 @@
-# E-Kamus: Mal## How It's Built
+# E-Kamus: Malay-Mandarin Educational Dictionary
 
 ### Frontend (What You See)
 
@@ -11,7 +11,7 @@
 - Uses Spring Boot
 - Connects to two helper tools:
   - LibreTranslate: For basic word translation
-  - Ollama with DeepSeek model: For explanations and examplesducational Dictionary
+  - Ollama with DeepSeek model: For explanations and examples
 
 > **Note:** This project is still under development. Some features may not be fully implemented yet.
 
@@ -37,9 +37,9 @@ A simple educational web app that helps children and beginners translate and lea
 
 - Spring Boot (v3.2.4)
 - WebFlux for reactive programming
-- Integration with LibreTranslate API and Dee:20B via Ollama
-
-
+- Integration with LibreTranslate API and DeepSeek-20B via Ollama
+- Caching mechanism for improved performance
+- Enhanced word-specific translation handlers
 
 > **Note:** Setting up requires some technical knowledge. We're working on making this easier!
 
@@ -50,12 +50,27 @@ A simple educational web app that helps children and beginners translate and lea
 - Docker for LibreTranslate
 - Ollama for the AI model
 
+### Running and Testing
+
+We've included several scripts to help you run and test the application:
+
+- `./run-services.sh` - Sets up LibreTranslate with Docker and provides instructions for Ollama
+- `./test-malay-words.sh` - Tests the translation of various Malay words through the API
+- `./test-ollama.sh` - Tests the Ollama integration directly with the DeepSeek model
+- `./test-api.sh` - General API testing script
 
 ## Current Development Status
 
-This project is a work-in-progress. We are currently:
+This project is a work-in-progress. We have recently:
 
-- Improving translation speed
+- Implemented caching for improved performance (5-minute timeout reduced)
+- Enhanced specific Malay word translations with specialized handlers
+- Fixed response parsing and formatting issues
+- Created testing scripts for API and Ollama testing
+
+We are currently working on:
+
+- Improving translation speed and accuracy
 - Making the interface more child-friendly
 - Testing with different AI models for better explanations
 
