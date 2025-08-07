@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
+import java.util.HashMap;
 import java.util.Map;
 
 @Service
@@ -20,6 +21,12 @@ public class DeepseekAiService {
 
     @Value("${deepseek.api.key}")
     private String deepseekApiKey;
+
+    @Value("${ollama.temperature:0.3}")
+    private double temperature;
+
+    @Value("${ollama.max_tokens:300}")
+    private int maxTokens;
 
     public DeepseekAiService(WebClient webClient) {
         this.webClient = webClient;
@@ -35,16 +42,19 @@ public class DeepseekAiService {
 
         // Use the model name from application.properties via deepseekApiKey
         // This allows us to easily change the model without changing the code
-        String modelName = deepseekApiKey.equals("not-needed-for-ollama") ? "deepseek" : deepseekApiKey;
+        String modelName = deepseekApiKey.equals("not-needed-for-ollama") ? "gpt-oss:20b" : deepseekApiKey;
         System.out.println("Using model: " + modelName);
 
-        // For Ollama completions API - using the direct completion endpoint format
-        Map<String, Object> requestBody = Map.of(
-                "model", modelName,
-                "prompt", prompt,
-                "stream", false,
-                "temperature", 0.7,
-                "max_tokens", 500);
+        // For Ollama completions API - using the direct completion endpoint format with
+        // optimized parameters
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("model", modelName);
+        requestBody.put("prompt", prompt);
+        requestBody.put("stream", false);
+        requestBody.put("temperature", temperature);
+        requestBody.put("max_tokens", maxTokens);
+        requestBody.put("system",
+                "You are a language expert. Always respond directly with the final answer in the exact format requested. Never use <think> tags or show your internal reasoning process.");
 
         // Using the API URL as specified in properties
         String apiUrl = deepseekApiUrl;
@@ -159,19 +169,25 @@ public class DeepseekAiService {
 
     private String generatePrompt(String word, String language) {
         return String.format(
-                "You are a language expert teaching Mandarin chinese simplified. " +
-                        "Please provide a comprehensive explanation of the %s word '%s'. " +
-                        "I need the following information in a clear, structured format:\n\n" +
-                        "1. A detailed explanation of what this word means in malaysia language.\n" +
-                        "2. The exact pinyin pronunciation with tone marks (e.g., 'hǎo' not 'hao3').\n" +
-                        "3. Three example sentences using this word in context (provide both Chinese characters and malaysia language translation).\n"
-                        +
-                        "4. Determine if this word functions as an adjective in Chinese grammar (YES or NO).\n\n" +
-                        "Format your response with these EXACT section headings:\n" +
-                        "EXPLANATION: [your detailed explanation here]\n" +
-                        "PRONUNCIATION: [pinyin with tone marks only, no Chinese characters]\n" +
-                        "EXAMPLES: [three numbered examples with Chinese and Malaysia language translations]\n" +
-                        "IS_ADJECTIVE: [answer only YES or NO]",
+                "You are a language expert teaching Simplified Mandarin Chinese.\n\n" +
+                        "DO NOT USE <think> TAGS OR INTERNAL DELIBERATION. RESPOND IMMEDIATELY WITH THE FINAL ANSWER.\n\n"+
+                        "Use simple styling of the text response (dont bold,italic,etc) " +
+                        "Please provide a comprehensive explanation of the %s word '%s'.\n" +
+                        "The response must be clear, structured, and follow the exact format below:\n\n" +
+                        "1. A simple explanation of the word's meaning in Malay (Bahasa Malaysia).\n" +
+                        "2. The accurate pinyin pronunciation only from word that i gave with tone marks (e.g., 'hǎo', not 'hao3').\n" +
+                        "3. Three example sentences using this word in real context. Each should include:\n" +
+                        "   - The original sentence in Chinese\n" +
+                        "   - Its translation in Malay\n" +
+                        "4. State whether this word is an adjective in Chinese grammar (answer with YES or NO).\n\n" +
+                        "Use the following EXACT section headers in your response:\n\n" +
+                        "EXPLANATION:\n[your simple explanation in Malay]\n\n" +
+                        "PRONUNCIATION:\n[pinyin with tone marks only]\n\n" +
+                        "EXAMPLES:\n" +
+                        "1. [Chinese sentence]\n   [Malay translation]\n" +
+                        "2. [Chinese sentence]\n   [Malay translation]\n" +
+                        "3. [Chinese sentence]\n   [Malay translation]\n\n" +
+                        "IS_ADJECTIVE:\n[YES or NO]",
                 language, word);
     }
 

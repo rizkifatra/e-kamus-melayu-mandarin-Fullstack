@@ -15,22 +15,9 @@ services:
     networks:
       - e-kamus-network
 
-  ollama:
-    image: ollama/ollama
-    container_name: ollama
-    # Use proper command format - ollama serve runs by default
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-models:/root/.ollama
-    restart: unless-stopped
-    networks:
-      - e-kamus-network
-
 networks:
   e-kamus-network:
     driver: bridge
 
 volumes:
   lt-ms-zh-models:
-  ollama-models:
