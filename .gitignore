@@ -1,3 +1,0 @@
-git rm --cached path/to/file.sh
-git rm --cached -r .vscode
-git rm --cached -r .idea

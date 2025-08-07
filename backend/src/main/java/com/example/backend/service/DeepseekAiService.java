@@ -8,13 +8,20 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 @Profile("dev")
 public class DeepseekAiService {
 
+    private static final Logger logger = LoggerFactory.getLogger(DeepseekAiService.class);
     private final WebClient webClient;
+    private final Map<String, AiResponse> cache = new ConcurrentHashMap<>();
 
     @Value("${deepseek.api.url}")
     private String deepseekApiUrl;
@@ -28,22 +35,34 @@ public class DeepseekAiService {
     @Value("${ollama.max_tokens:300}")
     private int maxTokens;
 
+    @Value("${app.cache.enabled:true}")
+    private boolean cacheEnabled;
+
     public DeepseekAiService(WebClient webClient) {
         this.webClient = webClient;
-        System.out.println("DeepseekAiService initialized with WebClient: " + webClient);
+        logger.info("DeepseekAiService initialized with WebClient: {}", webClient);
     }
 
     public Mono<AiResponse> generateExplanation(String word, String language) {
-        System.out.println("Generating explanation for: " + word + " in " + language);
+        String cacheKey = language + ":" + word;
+        logger.debug("Generating explanation for: {} in {}", word, language);
+
+        // Check if cache is enabled and if we have this word in our cache
+        if (cacheEnabled && cache.containsKey(cacheKey)) {
+            logger.info("Cache hit for word '{}' in {}", word, language);
+            return Mono.just(cache.get(cacheKey));
+        }
+
+        logger.info("Cache miss for word '{}' in {} - calling DeepSeek API", word, language);
         String prompt = generatePrompt(word, language);
 
-        System.out.println("Sending request to DeepSeek API for word: " + word);
-        System.out.println("API URL: " + deepseekApiUrl);
+        logger.debug("Sending request to DeepSeek API for word: {}", word);
+        logger.debug("API URL: {}", deepseekApiUrl);
 
         // Use the model name from application.properties via deepseekApiKey
         // This allows us to easily change the model without changing the code
         String modelName = deepseekApiKey.equals("not-needed-for-ollama") ? "gpt-oss:20b" : deepseekApiKey;
-        System.out.println("Using model: " + modelName);
+        logger.debug("Using model: {}", modelName);
 
         // For Ollama completions API - using the direct completion endpoint format with
         // optimized parameters
@@ -59,10 +78,9 @@ public class DeepseekAiService {
         // Using the API URL as specified in properties
         String apiUrl = deepseekApiUrl;
 
-        System.out.println("Final API URL: " + apiUrl);
-
-        System.out.println("Sending request to: " + apiUrl);
-        System.out.println("Request body: " + requestBody);
+        logger.debug("Final API URL: {}", apiUrl);
+        logger.debug("Sending request to: {}", apiUrl);
+        logger.debug("Request body: {}", requestBody);
 
         return webClient.post()
                 .uri(apiUrl)
@@ -72,23 +90,23 @@ public class DeepseekAiService {
                 .bodyToMono(Map.class)
                 // Add a timeout specifically for this request
                 .timeout(java.time.Duration.ofMinutes(5), Mono.fromCallable(() -> {
-                    System.out.println("Request to Ollama API timed out after 5 minutes");
+                    logger.error("Request to Ollama API timed out after 5 minutes");
                     throw new RuntimeException("Request to Ollama API timed out. LLM inference may require more time.");
                 }))
                 .doOnNext(response -> {
-                    System.out.println("Received DeepSeek API response: " + response);
+                    logger.debug("Received DeepSeek API response: {}", response);
                 })
                 .doOnError(error -> {
-                    System.err.println("Error during API call to " + apiUrl + ": " + error.getMessage());
+                    logger.error("Error during API call to {}: {}", apiUrl, error.getMessage());
                     if (error.getCause() != null) {
-                        System.err.println("Caused by: " + error.getCause().getMessage());
+                        logger.error("Caused by: {}", error.getCause().getMessage());
                     }
-                    error.printStackTrace();
+                    logger.error("Stack trace:", error);
                 })
                 .map(response -> {
                     try {
                         // Log the full response structure for debugging
-                        System.out.println("Full API response structure: " + response.keySet());
+                        logger.debug("Full API response structure: {}", response.keySet());
 
                         String generatedText = null;
 
@@ -126,13 +144,20 @@ public class DeepseekAiService {
                             throw new RuntimeException("No content found in API response: " + response);
                         }
 
-                        System.out.println("Generated text from DeepSeek: " + generatedText);
+                        logger.debug("Generated text from DeepSeek: {}", generatedText);
 
                         // Parse the generated text to extract explanation and examples
-                        return parseGeneratedText(generatedText);
+                        AiResponse aiResponse = parseGeneratedText(generatedText);
+
+                        // Store in cache for future requests if caching is enabled
+                        if (cacheEnabled) {
+                            cache.put(language + ":" + word, aiResponse);
+                            logger.info("Cached response for '{}' in {}", word, language);
+                        }
+
+                        return aiResponse;
                     } catch (Exception e) {
-                        System.err.println("Error parsing DeepSeek response: " + e.getMessage());
-                        e.printStackTrace();
+                        logger.error("Error parsing DeepSeek response: {}", e.getMessage(), e);
 
                         // Create a fallback response with error information
                         AiResponse fallback = new AiResponse();
@@ -145,16 +170,12 @@ public class DeepseekAiService {
                     }
                 })
                 .onErrorResume(e -> {
-                    System.err.println("DeepSeek API error: " + e.getMessage());
-                    System.err.println("Error class: " + e.getClass().getName());
+                    logger.error("DeepSeek API error: {} ({})", e.getMessage(), e.getClass().getName(), e);
 
                     // Check for connection issues
                     if (e.getMessage().contains("Connection refused") || e.getMessage().contains("Failed to connect")) {
-                        System.err.println("Connection refused: Make sure Ollama container is running at " + apiUrl);
+                        logger.error("Connection refused: Make sure Ollama container is running at {}", apiUrl);
                     }
-
-                    // Print full stack trace for debugging
-                    e.printStackTrace();
 
                     AiResponse fallback = new AiResponse();
                     fallback.setExplanation(
@@ -169,19 +190,22 @@ public class DeepseekAiService {
 
     private String generatePrompt(String word, String language) {
         return String.format(
-                "You are a language expert teaching Simplified Mandarin Chinese.\n\n" +
-                        "DO NOT USE <think> TAGS OR INTERNAL DELIBERATION. RESPOND IMMEDIATELY WITH THE FINAL ANSWER.\n\n"+
+                "You are a language expert teaching Simplified Mandarin Chinese who teaches Chinese and needs accurate linguistic details for practical use.\n\n"
+                        +
+                        "DO NOT USE <think> TAGS OR INTERNAL DELIBERATION. RESPOND IMMEDIATELY WITH THE FINAL ANSWER.\n\n"
+                        +
                         "Use simple styling of the text response (dont bold,italic,etc) " +
                         "Please provide a comprehensive explanation of the %s word '%s'.\n" +
                         "The response must be clear, structured, and follow the exact format below:\n\n" +
                         "1. A simple explanation of the word's meaning in Malay (Bahasa Malaysia).\n" +
-                        "2. The accurate pinyin pronunciation only from word that i gave with tone marks (e.g., 'hǎo', not 'hao3').\n" +
+                        "2. The accurate pinyin pronunciation only from word that i gave with tone marks (e.g., 'hǎo', not 'hao3').\n"
+                        +
                         "3. Three example sentences using this word in real context. Each should include:\n" +
                         "   - The original sentence in Chinese\n" +
                         "   - Its translation in Malay\n" +
                         "4. State whether this word is an adjective in Chinese grammar (answer with YES or NO).\n\n" +
                         "Use the following EXACT section headers in your response:\n\n" +
-                        "EXPLANATION:\n[your simple explanation in Malay]\n\n" +
+                        "EXPLANATION:\n[your simple explanation in Malay Language]\n\n" +
                         "PRONUNCIATION:\n[pinyin with tone marks only]\n\n" +
                         "EXAMPLES:\n" +
                         "1. [Chinese sentence]\n   [Malay translation]\n" +
@@ -197,74 +221,31 @@ public class DeepseekAiService {
 
     private AiResponse parseGeneratedText(String text) {
         AiResponse response = new AiResponse();
+        logger.debug("Parsing generated text of length: {}", text.length());
 
         try {
-            // Parse explanation
-            int explanationStart = text.indexOf("EXPLANATION:");
-            int examplesStart = text.indexOf("EXAMPLES:");
-            int pronunciationStart = text.indexOf("PRONUNCIATION:");
-            int isAdjectiveStart = text.indexOf("IS_ADJECTIVE:");
+            // Remove any <think> tags that might be in the response
+            text = text.replaceAll("(?s)<think>.*?</think>", "").trim();
 
-            if (explanationStart >= 0) {
-                String explanationEndPoint = findEndPoint(text, explanationStart,
-                        new String[] { "PRONUNCIATION:", "EXAMPLES:", "IS_ADJECTIVE:" });
-                if (explanationEndPoint != null) {
-                    String explanationText = text.substring(explanationStart + "EXPLANATION:".length(),
-                            text.indexOf(explanationEndPoint)).trim();
-                    response.setExplanation(explanationText);
-                } else if (text.length() > explanationStart + "EXPLANATION:".length()) {
-                    response.setExplanation(text.substring(explanationStart + "EXPLANATION:".length()).trim());
-                } else {
-                    response.setExplanation("No explanation available.");
-                }
-            } else {
-                response.setExplanation("No explanation section found in API response.");
-            }
+            // Define the sections we want to extract
+            Map<String, String> sections = extractSections(text);
 
-            // Parse examples
-            if (examplesStart >= 0) {
-                String examplesEndPoint = findEndPoint(text, examplesStart,
-                        new String[] { "EXPLANATION:", "PRONUNCIATION:", "IS_ADJECTIVE:" });
-                if (examplesEndPoint != null) {
-                    String examplesText = text.substring(examplesStart + "EXAMPLES:".length(),
-                            text.indexOf(examplesEndPoint)).trim();
-                    response.setExamples(examplesText);
-                } else if (text.length() > examplesStart + "EXAMPLES:".length()) {
-                    response.setExamples(text.substring(examplesStart + "EXAMPLES:".length()).trim());
-                } else {
-                    response.setExamples("No examples available.");
-                }
-            } else {
-                response.setExamples("No examples section found in API response.");
-            }
+            // Set the extracted values in the response object
+            response.setExplanation(sections.getOrDefault("EXPLANATION", "No explanation available."));
+            response.setPronunciation(sections.getOrDefault("PRONUNCIATION", "No pronunciation available."));
+            response.setExamples(sections.getOrDefault("EXAMPLES", "No examples available."));
 
-            // Parse pronunciation
-            if (pronunciationStart >= 0) {
-                String pronunciationEndPoint = findEndPoint(text, pronunciationStart,
-                        new String[] { "EXPLANATION:", "EXAMPLES:", "IS_ADJECTIVE:" });
-                if (pronunciationEndPoint != null) {
-                    String pronunciationText = text.substring(pronunciationStart + "PRONUNCIATION:".length(),
-                            text.indexOf(pronunciationEndPoint)).trim();
-                    response.setPronunciation(pronunciationText);
-                } else if (text.length() > pronunciationStart + "PRONUNCIATION:".length()) {
-                    response.setPronunciation(text.substring(pronunciationStart + "PRONUNCIATION:".length()).trim());
-                } else {
-                    response.setPronunciation("No pronunciation available.");
-                }
-            } else {
-                response.setPronunciation("No pronunciation section found in API response.");
-            }
+            // Handle adjective field
+            String isAdjectiveText = sections.getOrDefault("IS_ADJECTIVE", "NO").trim().toUpperCase();
+            response.setAdjective(isAdjectiveText.contains("YES"));
 
-            // Parse adjective information
-            if (isAdjectiveStart >= 0) {
-                String adjectiveText = text.substring(isAdjectiveStart + "IS_ADJECTIVE:".length()).trim().toUpperCase();
-                response.setAdjective(adjectiveText.contains("YES"));
-            } else {
-                response.setAdjective(false);
-            }
+            logger.debug("Parsed sections - Explanation: {}, Pronunciation: {}, Examples: {}, Is Adjective: {}",
+                    response.getExplanation().substring(0, Math.min(20, response.getExplanation().length())) + "...",
+                    response.getPronunciation(),
+                    response.getExamples().substring(0, Math.min(20, response.getExamples().length())) + "...",
+                    response.isAdjective());
         } catch (Exception e) {
-            System.err.println("Error parsing AI response: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error parsing AI response: {}", e.getMessage(), e);
             response.setExplanation("Error parsing explanation: " + e.getMessage());
             response.setExamples("Error parsing examples.");
             response.setPronunciation("Error parsing pronunciation.");
@@ -274,21 +255,105 @@ public class DeepseekAiService {
         return response;
     }
 
-    private String findEndPoint(String text, int startAfter, String[] possibleEndPoints) {
-        int earliestEndPoint = Integer.MAX_VALUE;
-        String result = null;
+    private Map<String, String> extractSections(String text) {
+        Map<String, String> sections = new HashMap<>();
+        String[] sectionHeaders = { "EXPLANATION:", "PRONUNCIATION:", "EXAMPLES:", "IS_ADJECTIVE:" };
 
-        for (String endPoint : possibleEndPoints) {
-            int endPointIndex = text.indexOf(endPoint, startAfter + 1);
-            if (endPointIndex != -1 && endPointIndex < earliestEndPoint) {
-                earliestEndPoint = endPointIndex;
-                result = endPoint;
+        // First, normalize line endings and remove any <think> blocks
+        text = text.replaceAll("(?s)<think>.*?</think>", "").trim();
+
+        // Normalize line endings
+        text = text.replaceAll("\r\n", "\n");
+
+        // Find the start positions of each section
+        Map<String, Integer> sectionPositions = new HashMap<>();
+        for (String header : sectionHeaders) {
+            int pos = text.indexOf(header);
+            if (pos >= 0) {
+                sectionPositions.put(header, pos);
+                logger.debug("Found section '{}' at position {}", header, pos);
+            } else {
+                logger.warn("Section '{}' not found in response", header);
             }
         }
 
-        return result;
+        // Sort the sections by their position in the text
+        List<String> orderedHeaders = sectionPositions.entrySet().stream()
+                .sorted(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toList());
+
+        logger.debug("Ordered section headers: {}", orderedHeaders);
+
+        // Extract each section's content
+        for (int i = 0; i < orderedHeaders.size(); i++) {
+            String currentHeader = orderedHeaders.get(i);
+            int currentStart = sectionPositions.get(currentHeader) + currentHeader.length();
+
+            // If this is the last section, extract until the end of text
+            if (i == orderedHeaders.size() - 1) {
+                String content = text.substring(currentStart).trim();
+                sections.put(currentHeader.replace(":", ""), content);
+                logger.debug("Extracted '{}' section (last): {} characters",
+                        currentHeader.replace(":", ""), content.length());
+            } else {
+                // Otherwise extract until the start of the next section
+                String nextHeader = orderedHeaders.get(i + 1);
+                int nextStart = sectionPositions.get(nextHeader);
+                String content = text.substring(currentStart, nextStart).trim();
+                sections.put(currentHeader.replace(":", ""), content);
+                logger.debug("Extracted '{}' section: {} characters",
+                        currentHeader.replace(":", ""), content.length());
+            }
+        }
+
+        return sections;
+    } // Cache management methods
+
+    /**
+     * Clears the translation cache
+     */
+    public void clearCache() {
+        if (!cacheEnabled) {
+            logger.info("Cache is disabled, nothing to clear");
+            return;
+        }
+        logger.info("Clearing translation cache. Removed {} entries.", cache.size());
+        cache.clear();
     }
 
-    // These methods have been removed as they are no longer used
-    // We're now using predefined responses and mock responses instead of API calls
+    /**
+     * Returns the current size of the translation cache
+     * 
+     * @return The number of entries in the cache
+     */
+    public int getCacheSize() {
+        if (!cacheEnabled) {
+            return 0;
+        }
+        return cache.size();
+    }
+
+    /**
+     * Checks if a word is in the cache
+     * 
+     * @param word     The word to check
+     * @param language The language of the word
+     * @return true if the word is in the cache, false otherwise
+     */
+    public boolean isInCache(String word, String language) {
+        if (!cacheEnabled) {
+            return false;
+        }
+        return cache.containsKey(language + ":" + word);
+    }
+
+    /**
+     * Checks if the cache is enabled
+     * 
+     * @return true if the cache is enabled, false otherwise
+     */
+    public boolean isCacheEnabled() {
+        return cacheEnabled;
+    }
 }
